@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Federal Litigation Tracker</title>
+  <meta name="description" content="Daily tracker of federal litigation against the Trump administration — sourced from CourtListener, Just Security, and the Michigan Clearinghouse." />
+  <link rel="stylesheet" href="/css/style.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet" />
+</head>
+<body>
+
+<!-- ── Header ──────────────────────────────────────────────────────── -->
+<header id="header" role="banner">
+  <div id="header-inner">
+    <div id="logo">
+      <!-- Gavel icon -->
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true">
+        <path d="M14 2L2 14l4 4L18 6l-4-4z"/>
+        <path d="M5 17L3 19a1.414 1.414 0 002 2l2-2"/>
+        <line x1="12" y1="6" x2="19" y2="13"/>
+      </svg>
+      <div>
+        <h1>Federal Litigation Tracker</h1>
+        <span>Trump Administration · Federal Defendants · Daily Updated</span>
+      </div>
+    </div>
+
+    <div id="header-actions">
+      <span id="last-sync" aria-live="polite"></span>
+      <button id="sync-btn" class="btn btn-primary" title="Run a manual sync across all sources">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" aria-hidden="true">
+          <polyline points="1 4 1 10 7 10"/>
+          <path d="M3.51 15a9 9 0 102.13-9.36L1 10"/>
+        </svg>
+        Sync Now
+      </button>
+    </div>
+  </div>
+</header>
+
+<!-- ── Stats bar ───────────────────────────────────────────────────── -->
+<div id="stat-bar" role="region" aria-label="Case statistics">
+  <div id="stat-bar-inner">
+    <div class="stat-item">
+      <span class="stat-value" id="stat-total">—</span>
+      <span class="stat-label">Total Cases</span>
+    </div>
+    <div class="stat-sep" aria-hidden="true"></div>
+    <div class="stat-item">
+      <span class="stat-value" id="stat-district">—</span>
+      <span class="stat-label">District</span>
+    </div>
+    <div class="stat-sep" aria-hidden="true"></div>
+    <div class="stat-item">
+      <span class="stat-value" id="stat-circuit">—</span>
+      <span class="stat-label">Circuit</span>
+    </div>
+    <div class="stat-sep" aria-hidden="true"></div>
+    <div class="stat-item">
+      <span class="stat-value" id="stat-supreme">—</span>
+      <span class="stat-label">Supreme Court</span>
+    </div>
+    <div class="stat-sep" aria-hidden="true"></div>
+    <div class="stat-item">
+      <span class="stat-value" id="stat-hidden">—</span>
+      <span class="stat-label">Hidden</span>
+    </div>
+  </div>
+</div>
+
+<!-- ── Main layout ─────────────────────────────────────────────────── -->
+<div id="layout" role="main">
+
+  <!-- Sidebar filters -->
+  <aside id="sidebar" aria-label="Filters">
+    <h2>Filters</h2>
+
+    <!-- Search (mirrors toolbar search on mobile) -->
+    <div class="filter-section">
+      <label for="filter-court-level">Court Level</label>
+      <select id="filter-court-level">
+        <option value="">All Levels</option>
+        <option value="District Court">U.S. District Court</option>
+        <option value="Circuit Court">U.S. Circuit Court</option>
+        <option value="Supreme Court">U.S. Supreme Court</option>
+      </select>
+    </div>
+
+    <div class="filter-section">
+      <label for="filter-case-type">Case Type</label>
+      <select id="filter-case-type">
+        <option value="">All Types</option>
+        <option value="FOIA">FOIA</option>
+        <option value="APA">Administrative Procedure Act (APA)</option>
+        <option value="Habeas Corpus">Habeas Corpus</option>
+        <option value="Civil Rights">Civil Rights</option>
+        <option value="First Amendment">First Amendment</option>
+        <option value="Immigration">Immigration</option>
+        <option value="Due Process">Due Process</option>
+        <option value="Employment">Employment / Federal Workers</option>
+        <option value="Mandamus">Mandamus</option>
+        <option value="Federal Litigation">Other Federal Litigation</option>
+      </select>
+    </div>
+
+    <div class="filter-section">
+      <label for="filter-source">Data Source</label>
+      <select id="filter-source">
+        <option value="">All Sources</option>
+        <option value="CourtListener">CourtListener (PACER)</option>
+        <option value="Just Security">Just Security</option>
+        <option value="Michigan Clearinghouse">Michigan Clearinghouse</option>
+      </select>
+    </div>
+
+    <!-- Priority organisations -->
+    <div class="filter-section">
+      <label>Priority Organization</label>
+      <div class="org-pills">
+        <button class="org-pill" data-org="democracy_forward">Democracy Forward</button>
+        <button class="org-pill" data-org="aclu">ACLU &amp; Affiliates</button>
+        <button class="org-pill" data-org="democracy_defenders">Democracy Defenders Fund</button>
+        <button class="org-pill" data-org="public_citizen">Public Citizen</button>
+        <button class="org-pill" data-org="protect_democracy">Protect Democracy</button>
+      </div>
+    </div>
+
+    <!-- Date range -->
+    <div class="filter-section">
+      <label for="filter-date-from">Filed From</label>
+      <input type="date" id="filter-date-from" />
+    </div>
+    <div class="filter-section">
+      <label for="filter-date-to">Filed To</label>
+      <input type="date" id="filter-date-to" />
+    </div>
+
+    <!-- Federal defendants only toggle -->
+    <div class="filter-section">
+      <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;text-transform:none;font-size:0.85rem;font-weight:600;color:var(--text)">
+        <input type="checkbox" id="filter-federal-only" checked
+               style="accent-color:var(--accent);width:16px;height:16px;" />
+        Federal defendants only
+      </label>
+    </div>
+
+    <!-- Sort -->
+    <div class="filter-section">
+      <label for="filter-sort">Sort By</label>
+      <select id="filter-sort">
+        <option value="date_filed">Date Filed (newest first)</option>
+        <option value="case_name">Case Name (A–Z)</option>
+        <option value="court">Court</option>
+        <option value="created_at">Date Added to Tracker</option>
+      </select>
+    </div>
+
+    <!-- Per page -->
+    <div class="filter-section">
+      <label for="filter-per-page">Cases Per Page</label>
+      <select id="filter-per-page">
+        <option value="25">25</option>
+        <option value="50" selected>50</option>
+        <option value="100">100</option>
+        <option value="200">200</option>
+      </select>
+    </div>
+
+    <button id="clear-filters" class="btn btn-outline" style="width:100%;margin-top:0.25rem;">
+      Clear All Filters
+    </button>
+  </aside>
+
+  <!-- Main content area -->
+  <div id="main">
+
+    <!-- Tabs -->
+    <div id="tab-bar" role="tablist">
+      <button class="tab-btn active" data-tab="active" role="tab" aria-selected="true">
+        Active Cases
+      </button>
+      <button class="tab-btn" data-tab="hidden" role="tab" aria-selected="false">
+        Hidden Cases
+        <span class="tab-count" id="hidden-tab-count">0</span>
+      </button>
+    </div>
+
+    <!-- Toolbar -->
+    <div id="toolbar">
+      <div id="search-box">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+        </svg>
+        <input type="search" id="search-input" placeholder="Search case name, party, court…"
+               aria-label="Search cases" autocomplete="off" spellcheck="false" />
+      </div>
+      <span id="result-count" aria-live="polite"></span>
+      <div id="view-toggle" role="group" aria-label="View mode">
+        <button class="view-btn active" data-view="grid" title="Grid view">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" aria-hidden="true">
+            <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
+            <rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/>
+          </svg>
+          Grid
+        </button>
+        <button class="view-btn" data-view="list" title="List view">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" aria-hidden="true">
+            <line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/>
+            <line x1="8" y1="18" x2="21" y2="18"/>
+            <line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>
+          </svg>
+          List
+        </button>
+      </div>
+    </div>
+
+    <!-- Cases container -->
+    <div id="cases-container" class="grid-view" role="region" aria-label="Case results" aria-live="polite">
+      <div class="loading-state">
+        <div class="spinner"></div>
+        <p>Loading cases…</p>
+      </div>
+    </div>
+
+    <!-- Pagination -->
+    <nav id="pagination" aria-label="Case pagination"></nav>
+
+  </div><!-- /main -->
+</div><!-- /layout -->
+
+<!-- ── Source attribution footer ──────────────────────────────────── -->
+<footer id="attribution" role="contentinfo">
+  <strong>Data Sources:</strong>
+  <a href="https://www.courtlistener.com" target="_blank" rel="noopener noreferrer">CourtListener / PACER</a>
+  <span>·</span>
+  <a href="https://www.justsecurity.org/trump-litigation-tracker/" target="_blank" rel="noopener noreferrer">Just Security Litigation Tracker</a>
+  <span>·</span>
+  <a href="https://clearinghouse.net" target="_blank" rel="noopener noreferrer">Michigan Civil Rights Litigation Clearinghouse</a>
+  <span style="margin-left:auto;color:var(--text-muted)">
+    All data is sourced directly from vetted, factual legal databases. Updated daily.
+  </span>
+</footer>
+
+<!-- ── Toast container ─────────────────────────────────────────────── -->
+<div id="toast-container" aria-live="polite" aria-atomic="false"></div>
+
+<script src="/js/app.js"></script>
+</body>
+</html>
