@@ -3,25 +3,18 @@ Civil Rights Litigation Clearinghouse (CRLC) scraper.
 
 Source: https://clearinghouse.net
 
-The University of Michigan Law School's Civil Rights Litigation Clearinghouse
-is one of the most rigorously vetted repositories of federal civil rights
-litigation in the country.  It provides detailed, attorney-reviewed case
-summaries for significant federal civil rights and civil liberties cases.
+University of Michigan Law School's rigorously vetted civil rights/liberties
+federal case repository.
 
-We query the public search interface for cases relevant to this tracker:
-  - Cases against the Trump administration or federal defendants
-  - Cases filed by the five priority organisations
-  - FOIA, APA, habeas, and related case types
-
-Every record is attributed to clearinghouse.net as the source.
+DATE FLOOR: Cases dated before 2025-01-20 are discarded.
 """
 
 import logging
 import re
 import time
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional
-from urllib.parse import urljoin, urlencode
+from urllib.parse import urljoin
 
 import requests
 from bs4 import BeautifulSoup
@@ -31,6 +24,7 @@ logger = logging.getLogger(__name__)
 BASE_URL = "https://clearinghouse.net"
 SEARCH_URL = "https://clearinghouse.net/results.php"
 SOURCE_NAME = "Michigan Clearinghouse"
+DATE_FLOOR = date(2025, 1, 20)
 
 HEADERS = {
     "User-Agent": (
@@ -39,7 +33,6 @@ HEADERS = {
     )
 }
 
-# Search queries targeting Trump-administration federal litigation
 SEARCH_QUERIES = [
     # Priority organisations
     "Democracy Forward",
@@ -59,6 +52,13 @@ SEARCH_QUERIES = [
     "Freedom of Information Act",
     "Administrative Procedure Act",
     "habeas corpus immigration",
+    # Tariff / trade
+    "IEEPA tariff",
+    "International Emergency Economic Powers Act",
+    "tariff challenge",
+    "Section 232",
+    "Section 301",
+    "Court of Federal Claims",
 ]
 
 
@@ -78,7 +78,7 @@ def _get(url: str, params: Optional[dict] = None) -> Optional[str]:
     return None
 
 
-def _parse_date(raw: str) -> Optional[object]:
+def _parse_date(raw: str) -> Optional[date]:
     raw = (raw or "").strip()
     for fmt in ("%B %d, %Y", "%b %d, %Y", "%m/%d/%Y", "%Y-%m-%d", "%Y"):
         try:
@@ -96,6 +96,11 @@ def _classify(text: str) -> str:
         return "APA"
     if "habeas" in t:
         return "Habeas Corpus"
+    if any(x in t for x in [
+        "tariff", "ieepa", "international emergency economic powers",
+        "section 232", "section 301", "section 201", "customs", "trade remedy",
+    ]):
+        return "Tariff / Trade"
     if "first amendment" in t:
         return "First Amendment"
     if "immigration" in t or "deportation" in t or "removal" in t:
@@ -115,6 +120,10 @@ def _map_court_level(court: str) -> str:
         return "Supreme Court"
     if any(x in c for x in ["circuit", "appeals", "appellate"]):
         return "Circuit Court"
+    if "federal claims" in c or "claims court" in c:
+        return "Court of Federal Claims"
+    if "international trade" in c:
+        return "Court of International Trade"
     return "District Court"
 
 
@@ -125,42 +134,27 @@ def _org_flags(text: str) -> dict:
             x in t for x in ["democracy forward", "democracy forward foundation"]
         ),
         "involves_aclu": any(
-            x in t
-            for x in [
-                "aclu",
-                "american civil liberties union",
-                "new york civil liberties",
-                "aclu foundation",
+            x in t for x in [
+                "aclu", "american civil liberties union",
+                "new york civil liberties", "aclu foundation",
             ]
         ),
         "involves_democracy_defenders": "democracy defenders" in t,
         "involves_public_citizen": "public citizen" in t,
         "involves_protect_democracy": "protect democracy" in t,
         "names_federal_defendant": any(
-            x in t
-            for x in [
-                "trump",
-                "united states",
-                "department of",
-                "federal government",
-                "doge",
-                "government efficiency",
+            x in t for x in [
+                "trump", "united states", "department of", "federal government",
+                "doge", "government efficiency", "customs", "trade representative",
             ]
         ),
     }
 
 
-def _parse_results_page(html: str, query: str) -> list:
-    """
-    Parse a Clearinghouse search results page.
-    The site renders case results as <div class="case"> or similar blocks,
-    each containing the case name, court, and a link to the detail page.
-    """
+def _parse_results_page(html: str) -> list:
     soup = BeautifulSoup(html, "lxml")
     cases = []
 
-    # The Clearinghouse renders results in various container patterns across
-    # different page versions.  We try multiple selectors.
     result_blocks = (
         soup.select("div.case-result")
         or soup.select("div.case")
@@ -168,7 +162,6 @@ def _parse_results_page(html: str, query: str) -> list:
         or soup.select("li.case-item")
     )
 
-    # Fallback: look for any anchor whose href contains '/case/'
     if not result_blocks:
         links = soup.find_all("a", href=re.compile(r"/case/\d+"))
         for link in links:
@@ -189,6 +182,8 @@ def _parse_results_page(html: str, query: str) -> list:
                 "nature_of_suit": "",
                 "plaintiff": "",
                 "defendant": "",
+                "complaint_url": None,
+                "complaint_pdf_url": None,
                 "date_filed": None,
                 "date_terminated": None,
                 "source": SOURCE_NAME,
@@ -205,16 +200,19 @@ def _parse_results_page(html: str, query: str) -> list:
         case_name = link_tag.get_text(strip=True) or text[:200]
         source_url = urljoin(BASE_URL, link_tag.get("href", ""))
 
-        # Extract court from block text (often formatted as "Court: ...")
         court_match = re.search(r"Court[:\s]+([^\n,|]+)", text, re.IGNORECASE)
         court = court_match.group(1).strip() if court_match else ""
 
-        # Extract date
-        date_match = re.search(r"Filed[:\s]+(\w+ \d{1,2},?\s*\d{4}|\d{4})", text, re.IGNORECASE)
+        date_match = re.search(
+            r"Filed[:\s]+(\w+ \d{1,2},?\s*\d{4}|\d{4})", text, re.IGNORECASE
+        )
         date_filed = _parse_date(date_match.group(1)) if date_match else None
 
-        flags = _org_flags(text)
+        # Enforce date floor — skip known pre-2025-01-20 cases
+        if date_filed and date_filed < DATE_FLOOR:
+            continue
 
+        flags = _org_flags(text)
         cases.append({
             "case_name": case_name,
             "case_number": None,
@@ -227,6 +225,8 @@ def _parse_results_page(html: str, query: str) -> list:
             "nature_of_suit": "",
             "plaintiff": "",
             "defendant": "",
+            "complaint_url": None,
+            "complaint_pdf_url": None,
             "date_filed": date_filed,
             "date_terminated": None,
             "source": SOURCE_NAME,
@@ -238,26 +238,18 @@ def _parse_results_page(html: str, query: str) -> list:
 
 
 def fetch_all() -> list:
-    """
-    Search the Michigan Clearinghouse for all relevant federal cases and return
-    a deduplicated list of normalised case dicts.
-    """
-    seen_urls = set()
+    seen_urls: set = set()
     all_cases = []
 
     for query in SEARCH_QUERIES:
         logger.info("Michigan Clearinghouse query: %s", query)
-        params = {
-            "keyword": query,
-            "federal": "1",     # federal courts only
-            "status": "",        # open + closed
-        }
+        params = {"keyword": query, "federal": "1", "status": ""}
         html = _get(SEARCH_URL, params=params)
         if not html:
             time.sleep(1)
             continue
 
-        cases = _parse_results_page(html, query)
+        cases = _parse_results_page(html)
         for case in cases:
             key = case.get("source_url") or case["case_name"]
             if key in seen_urls:
@@ -265,7 +257,7 @@ def fetch_all() -> list:
             seen_urls.add(key)
             all_cases.append(case)
 
-        time.sleep(0.5)   # polite rate limit
+        time.sleep(0.5)
 
-    logger.info("Michigan Clearinghouse: fetched %d unique cases", len(all_cases))
+    logger.info("Michigan Clearinghouse: %d unique cases fetched", len(all_cases))
     return all_cases

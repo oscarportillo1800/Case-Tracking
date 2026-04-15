@@ -2,13 +2,15 @@
 Sync engine — ingests cases from all sources into the database.
 
 Called by the scheduler (daily) or manually via the /api/sync endpoint.
-Each run is logged to the SyncLog table for full auditability.
+
+DATE FLOOR: Cases with date_filed < 2025-01-20 are rejected at this layer
+as a final safety net even if a scraper passes them through.
 """
 
 import logging
-from datetime import datetime, date
+from datetime import datetime
 
-from models import db, Case, SyncLog
+from models import db, Case, SyncLog, TRUMP_TERM_2_START
 from scrapers import courtlistener, just_security, michigan_clearinghouse
 
 logger = logging.getLogger(__name__)
@@ -16,19 +18,20 @@ logger = logging.getLogger(__name__)
 
 def _upsert_case(app, case_data: dict) -> tuple:
     """
-    Insert a new case or update an existing one (matched on docket_id or
-    case_number+court combination).  Returns (was_added: bool, was_updated: bool).
+    Insert a new case or update an existing one.
+    Returns (was_added: bool, was_updated: bool).
     """
+    # Final date-floor guard
+    date_filed = case_data.get("date_filed")
+    if date_filed and date_filed < TRUMP_TERM_2_START:
+        return False, False
+
     with app.app_context():
         existing = None
 
-        # Prefer matching on CourtListener docket_id (most stable key)
         if case_data.get("docket_id"):
-            existing = Case.query.filter_by(
-                docket_id=case_data["docket_id"]
-            ).first()
+            existing = Case.query.filter_by(docket_id=case_data["docket_id"]).first()
 
-        # Fall back to case_number + court
         if not existing and case_data.get("case_number") and case_data.get("court"):
             existing = Case.query.filter_by(
                 case_number=case_data["case_number"],
@@ -36,12 +39,12 @@ def _upsert_case(app, case_data: dict) -> tuple:
             ).first()
 
         if existing:
-            # Update mutable fields but never overwrite user-curated hidden/hidden_reason
             changed = False
             for field in [
                 "case_name", "court", "court_level", "docket_url", "case_type",
                 "cause_of_action", "nature_of_suit", "plaintiff", "defendant",
                 "date_filed", "date_terminated", "source_url",
+                "complaint_url", "complaint_pdf_url",
                 "involves_democracy_forward", "involves_aclu",
                 "involves_democracy_defenders", "involves_public_citizen",
                 "involves_protect_democracy", "names_federal_defendant",
@@ -56,7 +59,6 @@ def _upsert_case(app, case_data: dict) -> tuple:
                 return False, True
             return False, False
 
-        # New case
         new_case = Case(
             case_name=case_data["case_name"],
             case_number=case_data.get("case_number"),
@@ -69,6 +71,8 @@ def _upsert_case(app, case_data: dict) -> tuple:
             nature_of_suit=case_data.get("nature_of_suit"),
             plaintiff=case_data.get("plaintiff"),
             defendant=case_data.get("defendant"),
+            complaint_url=case_data.get("complaint_url"),
+            complaint_pdf_url=case_data.get("complaint_pdf_url"),
             date_filed=case_data.get("date_filed"),
             date_terminated=case_data.get("date_terminated"),
             source=case_data.get("source", "Unknown"),
@@ -88,23 +92,22 @@ def _upsert_case(app, case_data: dict) -> tuple:
 
 def run_sync(app, source_filter: str = "all", courtlistener_token: str = None) -> dict:
     """
-    Main sync entry point.  `source_filter` can be "all", "courtlistener",
-    "just_security", or "michigan_clearinghouse".
-
-    Returns a summary dict with counts per source.
+    Main sync entry point.  `source_filter` accepts:
+      "all" | "courtlistener" | "just_security" | "michigan_clearinghouse"
     """
     summary = {}
 
     sources = {
-        "courtlistener": _sync_courtlistener,
+        "courtlistener": lambda: _sync_courtlistener(courtlistener_token),
         "just_security": _sync_just_security,
         "michigan_clearinghouse": _sync_michigan_clearinghouse,
     }
 
-    if source_filter != "all" and source_filter in sources:
-        targets = {source_filter: sources[source_filter]}
-    else:
-        targets = sources
+    targets = (
+        {source_filter: sources[source_filter]}
+        if source_filter != "all" and source_filter in sources
+        else sources
+    )
 
     for src_name, sync_fn in targets.items():
         log = SyncLog(source=src_name, status="running")
@@ -116,11 +119,7 @@ def run_sync(app, source_filter: str = "all", courtlistener_token: str = None) -
         added = updated = fetched = 0
         error_msg = None
         try:
-            if src_name == "courtlistener":
-                cases = sync_fn(courtlistener_token)
-            else:
-                cases = sync_fn()
-
+            cases = sync_fn()
             fetched = len(cases)
             for case_data in cases:
                 was_added, was_updated = _upsert_case(app, case_data)
@@ -128,7 +127,6 @@ def run_sync(app, source_filter: str = "all", courtlistener_token: str = None) -
                     added += 1
                 elif was_updated:
                     updated += 1
-
             status = "success"
         except Exception as exc:
             error_msg = str(exc)
@@ -161,13 +159,13 @@ def run_sync(app, source_filter: str = "all", courtlistener_token: str = None) -
     return summary
 
 
-def _sync_courtlistener(token=None) -> list:
+def _sync_courtlistener(token=None):
     return courtlistener.fetch_all(api_token=token)
 
 
-def _sync_just_security() -> list:
+def _sync_just_security():
     return just_security.fetch_all()
 
 
-def _sync_michigan_clearinghouse() -> list:
+def _sync_michigan_clearinghouse():
     return michigan_clearinghouse.fetch_all()

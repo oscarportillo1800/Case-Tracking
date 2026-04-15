@@ -1,10 +1,13 @@
 """
 Database models for the Federal Litigation Tracker.
 """
-from datetime import datetime
+from datetime import datetime, date
 from flask_sqlalchemy import SQLAlchemy
 
 db = SQLAlchemy()
+
+# Hard date floor — only cases filed on or after Inauguration Day 2025
+TRUMP_TERM_2_START = date(2025, 1, 20)
 
 
 class Case(db.Model):
@@ -16,20 +19,28 @@ class Case(db.Model):
     case_name = db.Column(db.String(500), nullable=False)
     case_number = db.Column(db.String(100), nullable=True)
     court = db.Column(db.String(200), nullable=True)
-    court_level = db.Column(db.String(50), nullable=True)   # "District", "Circuit", "Supreme"
+    # "District Court" | "Circuit Court" | "Supreme Court" |
+    # "Court of Federal Claims" | "Court of International Trade"
+    court_level = db.Column(db.String(60), nullable=True)
 
     # Docket information
     docket_url = db.Column(db.String(500), nullable=True)
     docket_id = db.Column(db.String(100), nullable=True)    # CourtListener docket ID
 
     # Case classification
-    case_type = db.Column(db.String(100), nullable=True)    # FOIA, APA, Habeas, etc.
+    # FOIA | APA | Habeas Corpus | Tariff | Civil Rights | First Amendment |
+    # Immigration | Due Process | Employment | Mandamus | Federal Litigation
+    case_type = db.Column(db.String(100), nullable=True)
     cause_of_action = db.Column(db.String(300), nullable=True)
     nature_of_suit = db.Column(db.String(200), nullable=True)
 
     # Parties
     plaintiff = db.Column(db.String(500), nullable=True)
     defendant = db.Column(db.String(500), nullable=True)
+
+    # Complaint document — PDF or page URL when available
+    complaint_url = db.Column(db.String(500), nullable=True)     # CourtListener doc page
+    complaint_pdf_url = db.Column(db.String(500), nullable=True) # Direct PDF link
 
     # Key organization flags (for priority filtering)
     involves_democracy_forward = db.Column(db.Boolean, default=False)
@@ -41,16 +52,16 @@ class Case(db.Model):
     # Against-Trump-administration flag
     names_federal_defendant = db.Column(db.Boolean, default=False)
 
-    # Dates
+    # Dates — only cases >= TRUMP_TERM_2_START (2025-01-20) are stored
     date_filed = db.Column(db.Date, nullable=True)
     date_terminated = db.Column(db.Date, nullable=True)
 
     # Source tracking
-    source = db.Column(db.String(100), nullable=False)      # "CourtListener", "JustSecurity", etc.
+    source = db.Column(db.String(100), nullable=False)      # "CourtListener" | "Just Security" | etc.
     source_url = db.Column(db.String(500), nullable=True)   # Direct link to source entry
 
-    # User curation — hidden cases are excluded from default view but remain in DB
-    # permanently deleted cases are removed entirely via the DELETE endpoint
+    # User curation — hidden cases are excluded from the default view but remain in DB;
+    # permanently deleted cases are removed entirely via the DELETE endpoint.
     hidden = db.Column(db.Boolean, default=False, nullable=False)
     hidden_at = db.Column(db.DateTime, nullable=True)
     hidden_reason = db.Column(db.String(300), nullable=True)
@@ -73,6 +84,8 @@ class Case(db.Model):
             "nature_of_suit": self.nature_of_suit,
             "plaintiff": self.plaintiff,
             "defendant": self.defendant,
+            "complaint_url": self.complaint_url,
+            "complaint_pdf_url": self.complaint_pdf_url,
             "involves_democracy_forward": self.involves_democracy_forward,
             "involves_aclu": self.involves_aclu,
             "involves_democracy_defenders": self.involves_democracy_defenders,

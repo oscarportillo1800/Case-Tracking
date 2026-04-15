@@ -24,7 +24,33 @@ from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
 
 from models import db, Case, SyncLog
+from sqlalchemy import inspect, text
 import scheduler as sched
+
+
+def _migrate_db(db_instance):
+    """
+    Apply additive schema migrations for columns added after initial release.
+    SQLAlchemy's create_all() does not ALTER existing tables, so we do it here
+    with safe ADD COLUMN IF NOT EXISTS semantics.
+    """
+    new_cols = {
+        "complaint_url":     "VARCHAR(500)",
+        "complaint_pdf_url": "VARCHAR(500)",
+    }
+    try:
+        existing = {
+            c["name"]
+            for c in inspect(db_instance.engine).get_columns("cases")
+        }
+        with db_instance.engine.connect() as conn:
+            for col, col_type in new_cols.items():
+                if col not in existing:
+                    conn.execute(text(f"ALTER TABLE cases ADD COLUMN {col} {col_type}"))
+                    logger.info("DB migration: added column 'cases.%s'", col)
+            conn.commit()
+    except Exception as exc:
+        logger.warning("DB migration check failed (non-fatal): %s", exc)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -53,6 +79,7 @@ def create_app():
 
     with app.app_context():
         db.create_all()
+        _migrate_db(db)
 
     # ── Serve frontend ─────────────────────────────────────────────────────────
     @app.route("/")
@@ -145,9 +172,18 @@ def create_app():
             if org in org_map:
                 q = q.filter(org_map[org] == True)  # noqa: E712
 
+        # Always enforce the Jan 20 2025 date floor at the API layer
+        from models import TRUMP_TERM_2_START
+        q = q.filter(
+            db.or_(Case.date_filed == None, Case.date_filed >= TRUMP_TERM_2_START)  # noqa: E711
+        )
+
         if date_from:
             try:
-                q = q.filter(Case.date_filed >= datetime.strptime(date_from, "%Y-%m-%d").date())
+                floor = datetime.strptime(date_from, "%Y-%m-%d").date()
+                if floor < TRUMP_TERM_2_START:
+                    floor = TRUMP_TERM_2_START
+                q = q.filter(Case.date_filed >= floor)
             except ValueError:
                 pass
         if date_to:

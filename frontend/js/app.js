@@ -9,6 +9,9 @@
 const API = "/api";
 
 /* ── State ───────────────────────────────────────────────────────── */
+// Hard date floor — only cases from Trump's second term (Jan 20 2025 onward)
+const DATE_FLOOR = "2025-01-20";
+
 const state = {
   page: 1,
   perPage: 50,
@@ -19,7 +22,7 @@ const state = {
   source: "",
   org: "",
   federalOnly: true,
-  dateFrom: "",
+  dateFrom: DATE_FLOOR,   // default to Jan 20 2025
   dateTo: "",
   sort: "date_filed",
   order: "desc",
@@ -212,7 +215,20 @@ function renderCard(c, isHiddenView) {
     ? `<a href="${escAttr(c.docket_url)}" target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-outline" onclick="event.stopPropagation()">
          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12">
            <path d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/>
-         </svg>CourtListener Docket
+         </svg>Docket
+       </a>`
+    : "";
+
+  // Complaint link — prefer direct PDF, fall back to document page
+  const complaintHref = c.complaint_pdf_url || c.complaint_url;
+  const complaintLink = complaintHref
+    ? `<a href="${escAttr(complaintHref)}" target="_blank" rel="noopener noreferrer"
+          class="btn btn-sm btn-complaint" onclick="event.stopPropagation()"
+          title="${c.complaint_pdf_url ? 'View complaint PDF' : 'View complaint document'}">
+         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12">
+           <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
+           <polyline points="14 2 14 8 20 8"/>
+         </svg>${c.complaint_pdf_url ? "Complaint PDF" : "Complaint"}
        </a>`
     : "";
 
@@ -226,7 +242,10 @@ function renderCard(c, isHiddenView) {
       <div class="card-meta">${meta}</div>
       <div class="card-footer">
         ${c.case_number ? `<span class="case-number">${escHtml(c.case_number)}</span>` : "<span></span>"}
-        ${docketLink}
+        <div style="display:flex;gap:0.4rem;flex-wrap:wrap">
+          ${complaintLink}
+          ${docketLink}
+        </div>
       </div>
     </div>`;
 }
@@ -244,18 +263,29 @@ function buildBadges(c) {
 
   // Court level
   if (c.court_level) {
-    const levelClass = c.court_level === "Supreme Court" ? "badge-supremecourt" : "badge-court";
+    const levelClass = {
+      "Supreme Court": "badge-supremecourt",
+      "Circuit Court": "badge-court",
+      "Court of Federal Claims": "badge-cofc",
+      "Court of International Trade": "badge-cofc",
+    }[c.court_level] || "badge-court";
     parts.push(`<span class="badge ${levelClass}">${escHtml(c.court_level)}</span>`);
   }
 
   // Case type
   if (c.case_type) {
     const typeClass = {
-      "FOIA": "badge-foia",
-      "APA": "badge-apa",
+      "FOIA":          "badge-foia",
+      "APA":           "badge-apa",
       "Habeas Corpus": "badge-habeas",
+      "Tariff / Trade": "badge-tariff",
     }[c.case_type] || "badge-type";
     parts.push(`<span class="badge ${typeClass}">${escHtml(c.case_type)}</span>`);
+  }
+
+  // Complaint available indicator
+  if (c.complaint_url || c.complaint_pdf_url) {
+    parts.push(`<span class="badge badge-complaint" title="Complaint document available">Complaint ↗</span>`);
   }
 
   // Federal defendant
@@ -264,11 +294,11 @@ function buildBadges(c) {
   }
 
   // Priority orgs
-  if (c.involves_democracy_forward) parts.push(`<span class="badge badge-org">Democracy Forward</span>`);
-  if (c.involves_aclu)              parts.push(`<span class="badge badge-org">ACLU</span>`);
+  if (c.involves_democracy_forward)   parts.push(`<span class="badge badge-org">Democracy Forward</span>`);
+  if (c.involves_aclu)                parts.push(`<span class="badge badge-org">ACLU</span>`);
   if (c.involves_democracy_defenders) parts.push(`<span class="badge badge-org">Democracy Defenders</span>`);
-  if (c.involves_public_citizen)    parts.push(`<span class="badge badge-org">Public Citizen</span>`);
-  if (c.involves_protect_democracy) parts.push(`<span class="badge badge-org">Protect Democracy</span>`);
+  if (c.involves_public_citizen)      parts.push(`<span class="badge badge-org">Public Citizen</span>`);
+  if (c.involves_protect_democracy)   parts.push(`<span class="badge badge-org">Protect Democracy</span>`);
 
   return parts.join("");
 }
@@ -322,7 +352,26 @@ async function openCaseModal(id) {
     ? `<a href="${escAttr(c.docket_url)}" target="_blank" rel="noopener noreferrer" class="btn btn-primary">
          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
            <path d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/>
-         </svg>View Docket on CourtListener
+         </svg>CourtListener Docket
+       </a>`
+    : "";
+
+  const complaintPdfBtn = c.complaint_pdf_url
+    ? `<a href="${escAttr(c.complaint_pdf_url)}" target="_blank" rel="noopener noreferrer" class="btn btn-complaint">
+         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+           <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
+           <polyline points="14 2 14 8 20 8"/>
+           <line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
+         </svg>Complaint PDF
+       </a>`
+    : "";
+
+  const complaintDocBtn = !c.complaint_pdf_url && c.complaint_url
+    ? `<a href="${escAttr(c.complaint_url)}" target="_blank" rel="noopener noreferrer" class="btn btn-complaint">
+         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+           <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
+           <polyline points="14 2 14 8 20 8"/>
+         </svg>View Complaint
        </a>`
     : "";
 
@@ -375,6 +424,16 @@ async function openCaseModal(id) {
             ${c.source_url ? `<p><strong>Source URL:</strong> <a href="${escAttr(c.source_url)}" target="_blank" rel="noopener noreferrer">${escHtml(c.source_url)}</a></p>` : ""}
             ${c.docket_url ? `<p><strong>CourtListener Docket:</strong> <a href="${escAttr(c.docket_url)}" target="_blank" rel="noopener noreferrer">${escHtml(c.docket_url)}</a></p>` : ""}
           </div>
+          ${(c.complaint_url || c.complaint_pdf_url) ? `
+          <div class="modal-section">
+            <h3>Complaint Document</h3>
+            ${c.complaint_pdf_url
+              ? `<p><a href="${escAttr(c.complaint_pdf_url)}" target="_blank" rel="noopener noreferrer"><strong>Direct PDF Link</strong></a> — opens the complaint filing as a PDF</p>`
+              : ""}
+            ${c.complaint_url && c.complaint_url !== c.complaint_pdf_url
+              ? `<p><a href="${escAttr(c.complaint_url)}" target="_blank" rel="noopener noreferrer"><strong>Complaint Document Page</strong></a> — CourtListener document viewer</p>`
+              : ""}
+          </div>` : ""}
           ${c.hidden ? `
           <div class="modal-section">
             <h3>Hidden</h3>
@@ -384,6 +443,8 @@ async function openCaseModal(id) {
           </div>` : ""}
         </div>
         <div class="modal-footer">
+          ${complaintPdfBtn}
+          ${complaintDocBtn}
           ${docketBtn}
           ${sourceBtn}
           ${!c.hidden

@@ -82,10 +82,12 @@
     <div class="filter-section">
       <label for="filter-court-level">Court Level</label>
       <select id="filter-court-level">
-        <option value="">All Levels</option>
+        <option value="">All Courts</option>
         <option value="District Court">U.S. District Court</option>
         <option value="Circuit Court">U.S. Circuit Court</option>
         <option value="Supreme Court">U.S. Supreme Court</option>
+        <option value="Court of Federal Claims">U.S. Court of Federal Claims</option>
+        <option value="Court of International Trade">U.S. Court of International Trade</option>
       </select>
     </div>
 
@@ -96,6 +98,7 @@
         <option value="FOIA">FOIA</option>
         <option value="APA">Administrative Procedure Act (APA)</option>
         <option value="Habeas Corpus">Habeas Corpus</option>
+        <option value="Tariff / Trade">Tariff / Trade Challenge</option>
         <option value="Civil Rights">Civil Rights</option>
         <option value="First Amendment">First Amendment</option>
         <option value="Immigration">Immigration</option>
@@ -128,14 +131,17 @@
       </div>
     </div>
 
-    <!-- Date range -->
+    <!-- Date range — floor is locked at Jan 20 2025 (Trump 2nd term start) -->
     <div class="filter-section">
       <label for="filter-date-from">Filed From</label>
-      <input type="date" id="filter-date-from" />
+      <input type="date" id="filter-date-from" min="2025-01-20" value="2025-01-20" />
+      <span style="font-size:0.72rem;color:var(--text-muted);margin-top:0.25rem;display:block;">
+        Floor: Jan 20, 2025 (2nd term)
+      </span>
     </div>
     <div class="filter-section">
       <label for="filter-date-to">Filed To</label>
-      <input type="date" id="filter-date-to" />
+      <input type="date" id="filter-date-to" min="2025-01-20" />
     </div>
 
     <!-- Federal defendants only toggle -->

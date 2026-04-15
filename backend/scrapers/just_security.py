@@ -4,18 +4,15 @@ Just Security Trump Litigation Tracker scraper.
 Source: https://www.justsecurity.org/trump-litigation-tracker/
 
 Just Security maintains a manually curated, editorially vetted table of federal
-litigation against the Trump administration.  We scrape the public tracker page,
-extract case rows, and normalise them into our internal schema.
+litigation against the Trump administration.
 
-Because Just Security does not expose a public API, this module uses HTML
-parsing.  We parse responsibly (single pass, no hammering) and clearly attribute
-every record to Just Security as the source.
+DATE FLOOR: Cases dated before 2025-01-20 are discarded.
 """
 
 import logging
 import re
 import time
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional
 
 import requests
@@ -26,9 +23,7 @@ logger = logging.getLogger(__name__)
 TRACKER_URL = "https://www.justsecurity.org/trump-litigation-tracker/"
 SOURCE_NAME = "Just Security"
 
-# Just Security embeds some tracker data in an Airtable iframe or a custom
-# HTML table.  We attempt both extraction paths.
-AIRTABLE_EMBED_RE = re.compile(r'src=["\']([^"\']*airtable[^"\']*)["\']', re.IGNORECASE)
+DATE_FLOOR = date(2025, 1, 20)
 
 
 def _get_page(url: str) -> Optional[str]:
@@ -53,8 +48,8 @@ def _get_page(url: str) -> Optional[str]:
     return None
 
 
-def _parse_date(raw: str) -> Optional[datetime]:
-    raw = raw.strip()
+def _parse_date(raw: str) -> Optional[date]:
+    raw = (raw or "").strip()
     for fmt in ("%B %d, %Y", "%b %d, %Y", "%m/%d/%Y", "%Y-%m-%d", "%B %Y"):
         try:
             return datetime.strptime(raw, fmt).date()
@@ -71,6 +66,11 @@ def _classify(description: str) -> str:
         return "APA"
     if "habeas" in d:
         return "Habeas Corpus"
+    if any(x in d for x in [
+        "tariff", "ieepa", "international emergency economic powers",
+        "section 232", "section 301", "section 201", "customs", "trade remedy",
+    ]):
+        return "Tariff / Trade"
     if "first amendment" in d:
         return "First Amendment"
     if "immigration" in d or "deportation" in d:
@@ -82,6 +82,19 @@ def _classify(description: str) -> str:
     return "Federal Litigation"
 
 
+def _map_court_level(court: str) -> str:
+    c = (court or "").lower()
+    if "supreme" in c:
+        return "Supreme Court"
+    if any(x in c for x in ["circuit", "appeals", "appellate"]):
+        return "Circuit Court"
+    if "federal claims" in c or "claims court" in c:
+        return "Court of Federal Claims"
+    if "international trade" in c:
+        return "Court of International Trade"
+    return "District Court"
+
+
 def _org_flags(text: str) -> dict:
     t = text.lower()
     return {
@@ -89,48 +102,33 @@ def _org_flags(text: str) -> dict:
             x in t for x in ["democracy forward", "democracy forward foundation"]
         ),
         "involves_aclu": any(
-            x in t
-            for x in [
-                "aclu",
-                "american civil liberties union",
-                "new york civil liberties",
-                "aclu foundation",
+            x in t for x in [
+                "aclu", "american civil liberties union",
+                "new york civil liberties", "aclu foundation",
             ]
         ),
         "involves_democracy_defenders": "democracy defenders" in t,
         "involves_public_citizen": "public citizen" in t,
         "involves_protect_democracy": "protect democracy" in t,
         "names_federal_defendant": any(
-            x in t
-            for x in [
-                "trump",
-                "united states",
-                "department of",
-                "federal",
-                "doge",
-                "government efficiency",
+            x in t for x in [
+                "trump", "united states", "department of", "federal",
+                "doge", "government efficiency", "ustr", "customs", "trade representative",
             ]
         ),
     }
 
 
 def _parse_html_table(soup: BeautifulSoup) -> list:
-    """
-    Attempt to extract cases from an HTML <table> on the page.
-    Just Security sometimes renders a table with columns like:
-      Case Name | Court | Date Filed | Issue | Status | Description
-    """
     cases = []
     tables = soup.find_all("table")
     for table in tables:
         rows = table.find_all("tr")
         if len(rows) < 2:
             continue
-        # Try to identify header row
         header_cells = [th.get_text(strip=True).lower() for th in rows[0].find_all(["th", "td"])]
         if not any(kw in " ".join(header_cells) for kw in ["case", "court", "filed", "date"]):
             continue
-        # Map column indices
         col = {}
         for i, h in enumerate(header_cells):
             if "case" in h and "name" in h:
@@ -168,6 +166,12 @@ def _parse_html_table(soup: BeautifulSoup) -> list:
             raw_date = cell("date_filed")
             date_filed = _parse_date(raw_date) if raw_date else None
 
+            # Enforce date floor
+            if date_filed and date_filed < DATE_FLOOR:
+                continue
+            # If date unknown, still include — likely a new case
+            # (Just Security only tracks Trump-term 2 cases)
+
             description = cell("description")
             case_type_raw = cell("case_type")
             case_type = _classify(case_type_raw + " " + description)
@@ -176,9 +180,13 @@ def _parse_html_table(soup: BeautifulSoup) -> list:
             defendant = cell("defendant")
             court = cell("court")
 
-            # Extract any hyperlink as the source URL
-            link_tag = cells[col["case_name"]].find("a") if "case_name" in col and col["case_name"] < len(cells) else None
-            source_url = link_tag["href"] if link_tag and link_tag.get("href") else TRACKER_URL
+            link_tag = (
+                cells[col["case_name"]].find("a")
+                if "case_name" in col and col["case_name"] < len(cells) else None
+            )
+            source_url = (
+                link_tag["href"] if link_tag and link_tag.get("href") else TRACKER_URL
+            )
 
             full_text = " ".join([case_name, plaintiff, defendant, court, description])
             flags = _org_flags(full_text)
@@ -195,6 +203,8 @@ def _parse_html_table(soup: BeautifulSoup) -> list:
                 "nature_of_suit": "",
                 "plaintiff": plaintiff,
                 "defendant": defendant,
+                "complaint_url": None,
+                "complaint_pdf_url": None,
                 "date_filed": date_filed,
                 "date_terminated": None,
                 "source": SOURCE_NAME,
@@ -204,48 +214,8 @@ def _parse_html_table(soup: BeautifulSoup) -> list:
     return cases
 
 
-def _map_court_level(court: str) -> str:
-    c = court.lower()
-    if "supreme" in c:
-        return "Supreme Court"
-    if any(x in c for x in ["circuit", "appeals", "appellate"]):
-        return "Circuit Court"
-    if "district" in c or "d." in c:
-        return "District Court"
-    return "District Court"
-
-
-def fetch_all() -> list:
-    """
-    Fetch and return all cases from the Just Security Trump Litigation Tracker.
-    Returns a list of normalised case dicts.
-    """
-    logger.info("Fetching Just Security litigation tracker: %s", TRACKER_URL)
-    html = _get_page(TRACKER_URL)
-    if not html:
-        logger.warning("Just Security: no HTML returned, skipping.")
-        return []
-
-    soup = BeautifulSoup(html, "lxml")
-
-    # Primary path: HTML table on the page
-    cases = _parse_html_table(soup)
-
-    # Fallback: look for article-style list entries if no table found
-    if not cases:
-        cases = _parse_article_entries(soup)
-
-    logger.info("Just Security: extracted %d cases", len(cases))
-    return cases
-
-
 def _parse_article_entries(soup: BeautifulSoup) -> list:
-    """
-    Fallback parser for list/article-style tracker pages.
-    Looks for structured div or li blocks that describe individual cases.
-    """
     cases = []
-    # Look for common CMS patterns: divs with class containing 'case', 'entry', 'row'
     candidates = soup.find_all(
         lambda tag: tag.name in ["div", "li", "article"]
         and any(
@@ -273,10 +243,32 @@ def _parse_article_entries(soup: BeautifulSoup) -> list:
             "nature_of_suit": "",
             "plaintiff": "",
             "defendant": "",
+            "complaint_url": None,
+            "complaint_pdf_url": None,
             "date_filed": None,
             "date_terminated": None,
             "source": SOURCE_NAME,
             "source_url": source_url,
             **flags,
         })
+    return cases
+
+
+def fetch_all() -> list:
+    """
+    Fetch all cases from the Just Security Trump Litigation Tracker.
+    Returns a list of normalised case dicts, filtered to >= 2025-01-20.
+    """
+    logger.info("Fetching Just Security tracker: %s", TRACKER_URL)
+    html = _get_page(TRACKER_URL)
+    if not html:
+        logger.warning("Just Security: no HTML returned, skipping.")
+        return []
+
+    soup = BeautifulSoup(html, "lxml")
+    cases = _parse_html_table(soup)
+    if not cases:
+        cases = _parse_article_entries(soup)
+
+    logger.info("Just Security: %d cases extracted", len(cases))
     return cases
